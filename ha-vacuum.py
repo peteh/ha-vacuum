@@ -17,18 +17,23 @@ from google.assistant.embedded.v1alpha2 import (
 
 #config variables
 VACUUM_NAME = "Robo"
+ROOMS =["Livingroom", "Office", "Bathroom", "Toilet", "Kitchen", "Bedroom"]
+
+VACUUM_UNIQUE_ID = "ha-vacuum" # used for mqtt path and unique id for homeassistant
+MQTT_BROKER = "homeassistant.local"
+MQTT_PORT = 1883
 
 # TODO: handle restart of homeassistant
-# TODO: move state into commander class
 # TODO: make main topic and unique id also configurable
 # TODO: unhardcode mqtt topics
 
-
+VACUUM_ROOMS_UNIQUE_ID = VACUUM_UNIQUE_ID + "-rooms"
 # internal config vars
 DELAY_AFTER_STATE_UPDATE = 3 * 60 # delay between state updates from google home
 ASSISTANT_API_ENDPOINT = 'embeddedassistant.googleapis.com'
 DEFAULT_GRPC_DEADLINE = 60 * 3 + 5
 PLAYING = embedded_assistant_pb2.ScreenOutConfig.PLAYING
+HOMEASSISTANT_STATUS_TOPIC = "homeassistant/status"
 
 
 def log_assist_request_without_audio(assist_request):
@@ -153,16 +158,58 @@ class TextBasedAssistant(object):
         return text_response, html_response
 
 
-class VacuumState():
+class VacuumCommander():
     def __init__(self, assistant):
         self._assistant = assistant
         self._state = "idle"
         self._lastUpdate = datetime.datetime.min
 
+    def clean(self):
+        response_text, response_html = self._assistant.assist("Start cleaning")
+        if "starting" in response_text:
+            self._setState("cleaning")
+            return True
+        return False
+
+    def cleanRoom(self, roomName):
+        response_text, response_html = self._assistant.assist(
+            "Clean %s" % (roomName))
+        if "starting" in response_text:
+            self._setState("cleaning")
+            return True
+        return False
+
+    def pause(self):
+        response_text, response_html = self._assistant.assist("Pause cleaning")
+        if "pausing" in response_text:
+            if self.getState() == "cleaning": # only set to pause if we were cleaning
+                self._setState("pause")
+            return True
+        return False
+
+    def stop(self):
+        response_text, response_html = self._assistant.assist("Stop cleaning")
+        if "stopping" in response_text:
+            self._setState("idle")
+            return True
+        return False
+
+    def return_to_base(self):
+        response_text, response_html = self._assistant.assist(
+            "Send vacuum to dock")
+        if "docking" in response_text:
+            self._setState("returning")
+            return True
+        return False
+
+    def locate(self):
+        response_text, response_html = self._assistant.assist("Locate vacuum")
+        return "locating" in response_text
+
     def getState(self):
         return self._state
 
-    def update(self):
+    def updateState(self):
         lastUpdateDiffS = (datetime.datetime.now() - self._lastUpdate).total_seconds() 
         if lastUpdateDiffS < DELAY_AFTER_STATE_UPDATE: 
             logging.debug("Skipping state update (last: %d seconds ago)", lastUpdateDiffS)
@@ -171,10 +218,12 @@ class VacuumState():
         response_text, response_html = self._assistant.assist(
             "Is vacuum docked?")
         if "is docked" in response_text:
-            self._state = "docked"
+            logging.debug("GHome is docked?: %s", response_text)
+            self._setState("docked")
         else:
             response_text, response_html = self._assistant.assist(
             "What is vacuum doing?")
+            logging.debug("GHome what's vacuum doing?: %s", response_text)
             if "is running" in response_text:
                 self._setState("cleaning")
             elif "is paused" in response_text:
@@ -194,54 +243,6 @@ class VacuumState():
     def __str__(self):
         return self._state
 
-
-class VacuumCommander():
-    def __init__(self, assistant, vacuumState):
-        self._assistant = assistant
-        self._vacuumState = vacuumState
-
-    def clean(self):
-        response_text, response_html = self._assistant.assist("Start cleaning")
-        if "starting" in response_text:
-            self._vacuumState._setState("cleaning")
-            return True
-        return False
-
-    def cleanRoom(self, roomName):
-        response_text, response_html = self._assistant.assist(
-            "Clean %s" % (roomName))
-        if "starting" in response_text:
-            self._vacuumState._setState("cleaning")
-            return True
-        return False
-
-    def pause(self):
-        response_text, response_html = self._assistant.assist("Pause cleaning")
-        if "pausing" in response_text:
-            if self._vacuumState.getState() == "cleaning": # only set to pause if we were cleaning
-                self._vacuumState._setState("pause")
-            return True
-        return False
-
-    def stop(self):
-        response_text, response_html = self._assistant.assist("Stop cleaning")
-        if "stopping" in response_text:
-            self._vacuumState._setState("idle")
-            return True
-        return False
-
-    def return_to_base(self):
-        response_text, response_html = self._assistant.assist(
-            "Send vacuum to dock")
-        if "docking" in response_text:
-            self._vacuumState._setState("returning")
-            return True
-        return False
-
-    def locate(self):
-        response_text, response_html = self._assistant.assist("Locate vacuum")
-        return "locating" in response_text
-
 class MqttHAClient():
     def __init__(self, vacuumCommander):
         # TODO: move to extra method
@@ -253,11 +254,13 @@ class MqttHAClient():
         self._vacuumCommander = vacuumCommander
     
     def _onConnect(self, client, userdata, flags, rc):
-        self._client.subscribe("ha-vacuum/cmd")
+        self._client.subscribe("%s/cmd" % VACUUM_UNIQUE_ID)
+        self._client.subscribe("%s/roomselect/cmd" % VACUUM_UNIQUE_ID)
+        self._client.subscribe(HOMEASSISTANT_STATUS_TOPIC)
         self._publishConfig()
     
     def _onMessage(self, client, userdata, msg):
-        if msg.topic == "ha-vacuum/cmd":
+        if msg.topic == "%s/cmd" % (VACUUM_UNIQUE_ID):
             command = msg.payload.decode("utf-8")
             logging.info("Mqtt Command: %s", command)
             if command == "start":
@@ -270,25 +273,52 @@ class MqttHAClient():
                 self._vacuumCommander.pause()
             elif command == "locate":
                 self._vacuumCommander.locate()
-                
+        elif msg.topic == "%s/roomselect/cmd" % VACUUM_UNIQUE_ID:
+            room = msg.payload.decode("utf-8")
+            if room.lower() != "(none)":
+                self._vacuumCommander.cleanRoom(room)
 
-    def _publishConfig(self):
+        elif msg.topic == HOMEASSISTANT_STATUS_TOPIC:
+            command = msg.payload.decode("utf-8")
+            if command.lower() == "online":
+                self._publishConfig()
+                
+    def _publishConfigVacuum(self):
         config = {}
-        topic = "homeassistant/vacuum/ha-vacuum/config"
-        config["~"] = "ha-vacuum"
+        topic = "homeassistant/vacuum/%s/config" % (VACUUM_UNIQUE_ID)
+        config["~"] = VACUUM_UNIQUE_ID
         config["availability_topic"] = "~"
         config["name"] = VACUUM_NAME
-        config["unique_id"] = "ha-vacuum"
+        config["unique_id"] = VACUUM_UNIQUE_ID
         config["command_topic"] = "~/cmd"
         config["schema"] = "state"
         config["state_topic"] = "~/state"
         config["supported_features"] = ["start", "stop", "return_home", "pause", "status", "locate"]
+        logging.info("Publishing homeassistant config for vacuum on %s", topic)
         self._client.publish(topic, json.dumps(config))
-        self._client.publish("ha-vacuum", "online")
+        self._client.publish(VACUUM_UNIQUE_ID, "online")
+
+    def _publishConfigRoomSelect(self):
+        roomselectTopic = VACUUM_UNIQUE_ID + "/roomselect"
+        config = {}
+        topic = "homeassistant/select/%s/config" % (VACUUM_ROOMS_UNIQUE_ID)
+        config["~"] = roomselectTopic
+        config["availability_topic"] = "~"
+        config["name"] = VACUUM_NAME + " Rooms"
+        config["unique_id"] = VACUUM_ROOMS_UNIQUE_ID
+        config["command_topic"] = "~/cmd";
+        config["options"] = ["(none)"] + ROOMS
+        logging.info("Publishing homeassistant config for roomselect on %s", topic)
+        self._client.publish(topic, json.dumps(config))
+        self._client.publish(roomselectTopic, "online")
+
+    def _publishConfig(self):
+        self._publishConfigVacuum()
+        self._publishConfigRoomSelect()
     
-    def publishState(self, vacuum_state):
+    def publishState(self):
         state = {}
-        state["state"] = vacuum_state.getState()
+        state["state"] = self._vacuumCommander.getState()
         self._client.publish("ha-vacuum/state", json.dumps(state))
 
 
@@ -338,15 +368,13 @@ def main(cli, verbose, *args, **kwargs):
             if response_text:
                 click.echo('<@assistant> %s' % response_text)
     else:
-        vacuum_state = VacuumState(assistant)
-
-        vacuum_commander = VacuumCommander(assistant, vacuum_state)
+        vacuum_commander = VacuumCommander(assistant)
         mqtt_client = MqttHAClient(vacuum_commander)
 
         while True:
-            vacuum_state.update()
-            mqtt_client.publishState(vacuum_state)
-            time.sleep(10) # sleep at least 5min to not exhaust google api
+            vacuum_commander.updateState()
+            mqtt_client.publishState()
+            time.sleep(10)
 
 
 if __name__ == '__main__':
