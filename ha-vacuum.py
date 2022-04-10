@@ -20,6 +20,8 @@ VACUUM_NAME = "Robo"
 
 # TODO: handle restart of homeassistant
 # TODO: move state into commander class
+# TODO: make main topic and unique id also configurable
+# TODO: unhardcode mqtt topics
 
 
 # internal config vars
