@@ -1,0 +1,6 @@
+beautifulsoup4
+click
+lxml
+google-assistant-grpc
+google-auth-oauthlib
+paho-mqtt
