@@ -20,7 +20,8 @@ VACUUM_NAME = "Robo"
 ROOMS =["Livingroom", "Office", "Bathroom", "Toilet", "Kitchen", "Bedroom"]
 
 VACUUM_UNIQUE_ID = "ha-vacuum" # used for mqtt path and unique id for homeassistant
-MQTT_BROKER = "homeassistant.local"
+#MQTT_BROKER = "homeassistant.local"
+MQTT_BROKER = "192.168.2.50"
 MQTT_PORT = 1883
 
 # TODO: handle restart of homeassistant
@@ -249,7 +250,7 @@ class MqttHAClient():
         self._client = mqtt.Client()
         self._client.on_connect = self._onConnect
         self._client.on_message = self._onMessage
-        self._client.connect("homeassistant.local")
+        self._client.connect(MQTT_BROKER)
         self._client.loop_start()
         self._vacuumCommander = vacuumCommander
     
