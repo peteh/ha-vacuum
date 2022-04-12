@@ -281,6 +281,7 @@ class MqttHAClient():
 
         elif msg.topic == HOMEASSISTANT_STATUS_TOPIC:
             command = msg.payload.decode("utf-8")
+            logging.info("HA went %s", command)
             if command.lower() == "online":
                 self._publishConfig()
                 
@@ -296,7 +297,7 @@ class MqttHAClient():
         config["state_topic"] = "~/state"
         config["supported_features"] = ["start", "stop", "return_home", "pause", "status", "locate"]
         logging.info("Publishing homeassistant config for vacuum on %s", topic)
-        self._client.publish(topic, json.dumps(config))
+        self._client.publish(topic, json.dumps(config), retain=True)
         self._client.publish(VACUUM_UNIQUE_ID, "online")
 
     def _publishConfigRoomSelect(self):
@@ -310,7 +311,7 @@ class MqttHAClient():
         config["command_topic"] = "~/cmd";
         config["options"] = ["(none)"] + ROOMS
         logging.info("Publishing homeassistant config for roomselect on %s", topic)
-        self._client.publish(topic, json.dumps(config))
+        self._client.publish(topic, json.dumps(config), retain=True)
         self._client.publish(roomselectTopic, "online")
 
     def _publishConfig(self):
