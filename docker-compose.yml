@@ -1,0 +1,10 @@
+version: '3'
+services:
+  ha-vacuum:
+    build: .
+    container_name: ha-vacuum
+    command: python ha-vacuum.py 
+    volumes:
+      - .:/usr/src/app
+#    ports:
+#      - "8000:8000"
