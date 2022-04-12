@@ -17,7 +17,7 @@ from google.assistant.embedded.v1alpha2 import (
 
 #config variables
 VACUUM_NAME = "Robo"
-ROOMS =["Livingroom", "Office", "Bathroom", "Toilet", "Kitchen", "Bedroom"]
+ROOMS =["Bathroom", "Bedroom", "Hall", "Kitchen", "Livingroom", "Office", "Toilet"]
 
 VACUUM_UNIQUE_ID = "ha-vacuum" # used for mqtt path and unique id for homeassistant
 #MQTT_BROKER = "homeassistant.local"
