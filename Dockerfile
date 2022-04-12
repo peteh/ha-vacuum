@@ -2,7 +2,9 @@ FROM python:3.10.4-alpine
 RUN apk update \
   && apk add \
     build-base \
-    linux-headers
+    linux-headers \
+    libxml2-dev \
+    libxslt-dev
 RUN mkdir /usr/src/app
 WORKDIR /usr/src/app
 COPY ./requirements.txt .
